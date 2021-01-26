@@ -1,5 +1,6 @@
 import gspread
 import selenium
+import re
 from selenium import webdriver
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -47,21 +48,28 @@ sheet = client.open(googleDocName).worksheet(prioritiesTab)
 raider_names = sheet.col_values(1)[1:]
 print(raider_names)
 
+success = []
+fails = []
+skips = []
+wrongSpec = []
 
 # Using Chrome to access web
 driver = webdriver.Chrome()#chrome_options=chrome_options)
+tabNum=0;
 for raider in (raider_names) :
 	print("\n_______________________________________________________")
+	print("Running", raider,"'s parse")
 	
 	charRow = sheet.find(raider).row
 	roleColumn = sheet.find('Role').col
 	charRole = sheet.cell(charRow, roleColumn).value
 	
-	if charRole != 'DPS':
-		print("Character role isn't DPS. Still sim?")
+	if charRole == 'Heals':
+		print("Skipping simming heals")
+		skips.append(raider)
+		continue
 	
 	try :
-		print("Running", raider,"'s parse")
 		# Navigate to Droptimizer
 		driver.get('https://www.raidbots.com/simbot/droptimizer')
 		waitForLoad = WebDriverWait(driver, 10).until(ec.visibility_of_element_located((By.ID, "ArmoryInput-armorySearch")))
@@ -83,6 +91,20 @@ for raider in (raider_names) :
 		print("Waiting for character to load")
 		# wait for element to appear
 		waitForLoad = WebDriverWait(driver, 10).until(ec.visibility_of_element_located((By.XPATH, "//*[@id='app']/div/div[2]/section/section/div[2]/section/div[1]/div[2]/div[1]/div[3]/div/div[2]/div/div[2]")))
+
+		# if wrong spec
+		src = driver.page_source
+		text_found = re.search("Your spec is not supported in SimulationCraft at this time", src)
+		if text_found:
+			print("Wrong spec! Skipping")
+			tabNum+=1;
+			print("Switching to tab", str(tabNum))
+			driver.execute_script("window.open();")
+			driver.switch_to.window(driver.window_handles[tabNum])
+			wrongSpec.append(raider)
+			continue
+		else :
+			print("Spec good. Proceeding")
 
 		print("Selecting Castle Nathria")
 		castleNathria = driver.find_element_by_xpath("//*[@id='app']/div/div[2]/section/section/div[2]/section/div[2]/div[1]/div[2]/div/div[2]")
@@ -106,19 +128,40 @@ for raider in (raider_names) :
 		button = driver.find_element_by_xpath("//*[@id='app']/div/div[2]/section/section/div[2]/section/div[7]/div/div/button")
 		driver.execute_script("arguments[0].click();", button)
 
-		waitForLoad = WebDriverWait(driver, 600).until(ec.visibility_of_element_located((By.XPATH, "//*[@id='app']/div/div[2]/section/section/div/div[2]/div[1]/div[1]/div[1]/div[2]")))
+		waitForLoad = WebDriverWait(driver, 900).until(ec.visibility_of_element_located((By.XPATH, "//*[@id='app']/div/div[2]/section/section/div/div[2]/div[1]/div[1]/div[1]/div[2]")))
 		print("Sim complete!")
 
+		sheet.update_cell(charRow, 14, driver.current_url)
+		
+		print("Sim URL updated. Parsing priorities")
+
+		priorityDiv = 2
+		try :
+			if driver.find_element_by_xpath("//*[@id='app']/div/div[2]/section/section/div/div[2]/div[1]/div[3]/div[2]/div[2]"):
+				priorityDiv = 3
+		except :
+			print("Trying the alt priority lookup div (2)")
 		for i in range (2,12) :
-			boss1Name = driver.find_element_by_xpath("//*[@id='app']/div/div[2]/section/section/div/div[2]/div[1]/div[3]/div["+str(i)+"]/div[2]").text
-			boss1Priority = driver.find_element_by_xpath("//*[@id='app']/div/div[2]/section/section/div/div[2]/div[1]/div[3]/div["+str(i)+"]/div[6]/div/div").text
-			print("\t",boss1Name, "priority", boss1Priority)
+			bossName = driver.find_element_by_xpath("//*[@id='app']/div/div[2]/section/section/div/div[2]/div[1]/div["+str(priorityDiv)+"]/div["+str(i)+"]/div[2]").text
+			bossPriority = driver.find_element_by_xpath("//*[@id='app']/div/div[2]/section/section/div/div[2]/div[1]/div["+str(priorityDiv)+"]/div["+str(i)+"]/div[6]/div/div").text
+			print("\t",bossName, "priority", bossPriority)
 		
-			bossColumn = sheet.find(boss1Name).col
+			bossColumn = sheet.find(bossName).col
 	
-			sheet.update_cell(charRow, bossColumn, boss1Priority)
+			sheet.update_cell(charRow, bossColumn, bossPriority)
 		
-		sheet.update_cell(row, 14, driver.current_url)
 		print(raider,"'s sim is complete")
-	except :
+		success.append(raider)
+	except Exception as e :
 		print("Failed to parse", raider)
+		print (e)
+		fails.append(raider)
+	tabNum+=1;
+	print("Switching to tab", str(tabNum))
+	driver.execute_script("window.open();")
+	driver.switch_to.window(driver.window_handles[tabNum])
+	
+print("Successful parses",success)
+print("Failed parses",fails)
+print("Skipped parses",skips)
+print("Wrong spec parses",wrongSpec)
